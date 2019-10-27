@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <SDL2/SDL.h>
 
 void color(int n, int iter_max, int* colors) {
     int N = 256; // colors per element
@@ -36,25 +37,60 @@ float map(float val, float in_min, float in_max, float out_min, float out_max) {
 }
 
 int main() {
-    const int width = 10000;
-    const int height = 10000;
-    const int max_iter = 30;
+
+    SDL_Init(SDL_INIT_VIDEO);
+
+    SDL_Window*   window;
+    SDL_Renderer* renderer;
+    SDL_Event     event;
+
+    const int width = 800;
+    const int height = 800;
+    const int max_iter = 255;
     const float min_x = -2.0;
     const float max_x = 1.0;
-    const float min_y = -1.2;
+    const float min_y = -1.6;
     const float max_y = min_y + (max_x - min_x) * height / width; 
 
-    FILE* fp = fopen("mandelbrot.ppm", "wb");
-    fprintf(fp, "P6\n%d %d\n255\n", width, height);
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            float cx = map(x, 0, width, min_x, max_y);
-            float cy = map(y, 0, height, min_y, max_y);
-            int iter = mandelbrot(cx, cy, max_iter);
-            int colors[3];
-            color(iter, max_iter, (void*)&colors);
-            fwrite(colors, 1, 3, fp);
+    SDL_CreateWindowAndRenderer(1920, 1080, 0, &window, &renderer);
+    SDL_RenderSetLogicalSize(renderer, width, height);
+
+    int quit = 0;
+    while(1) {
+        SDL_RenderPresent(renderer);
+
+        for (int y = 0; y < height; ++y) {
+            if (quit) {
+                break;
+            }
+            for (int x = 0; x < width; ++x) {
+                if (SDL_PollEvent(&event)) {
+                    if (event.type == SDL_QUIT) {
+                        quit = 1;
+                        break;
+                    }
+                    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == 'q') {
+                        quit = 1;
+                        break;
+                    }
+                }
+                float cx = map(x, 0, width, min_x, max_y);
+                float cy = map(y, 0, height, min_y, max_y);
+                int iter = mandelbrot(cx, cy, max_iter);
+                int colors[3];
+                color(iter, max_iter, (void*)&colors);
+                SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
+                SDL_RenderDrawPoint(renderer, x, y);
+            }
+        }
+
+        if (quit) {
+            break;
         }
     }
-    fclose(fp);
+    // Close and destroy the window
+    SDL_DestroyWindow(window);
+
+    // Clean up
+    SDL_Quit();
 }
