@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.9)
 
 project(mandelbrot LANGUAGES C)
 
+SET(AVX_FLAG "-mavx")
+add_definitions(${AVX_FLAG})
+
 find_package(SDL2 REQUIRED)
 include_directories(${SDL2_INCLUDE_DIRS})
 

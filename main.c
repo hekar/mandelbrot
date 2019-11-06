@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <SDL2/SDL.h>
+#include <omp.h>
+#include <emmintrin.h>
+#include <time.h>
 
 void color(int n, int iter_max, int* colors) {
     int N = 256; // colors per element
@@ -14,6 +17,13 @@ void color(int n, int iter_max, int* colors) {
     int nn = n - colors[2] * N * N;
     colors[0] = nn/N;
     colors[1] = nn - colors[0] * N;
+}
+
+// assuming in_min is 0 and defining the factor as a constant for optimization
+__m128 map_sse(__m128 vec, float factor, float out_min) {
+    __m128 mul_vec = _mm_mul_ps(vec, _mm_set_ps1(factor));
+    __m128 res     = _mm_add_ps(mul_vec, _mm_set_ps1(out_min));
+    return res;
 }
 
 int mandelbrot(float cx, float cy, int max_iter) {
@@ -44,49 +54,91 @@ int main() {
     SDL_Renderer* renderer;
     SDL_Event     event;
 
-    const int width = 800;
-    const int height = 800;
+    const int width = 1440;
+    const int height = 1080;
     const int max_iter = 255;
-    const float min_x = -2.0;
-    const float max_x = 1.0;
-    const float min_y = -1.6;
+    const float min_x = -2.5;
+    const float max_x = 1.5;
+    const float min_y = -1.5;
     const float max_y = min_y + (max_x - min_x) * height / width; 
+    float x_factor = (max_x - min_x) / width;
+    float y_factor = (max_y - min_y) / height;
 
-    SDL_CreateWindowAndRenderer(1920, 1080, 0, &window, &renderer);
+    SDL_CreateWindowAndRenderer(1440, 1080, 0, &window, &renderer);
     SDL_RenderSetLogicalSize(renderer, width, height);
 
     int quit = 0;
     while(1) {
         SDL_RenderPresent(renderer);
 
-        for (int y = 0; y < height; ++y) {
-            if (quit) {
+        if (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                quit = 1;
                 break;
             }
-            for (int x = 0; x < width; ++x) {
-                if (SDL_PollEvent(&event)) {
-                    if (event.type == SDL_QUIT) {
-                        quit = 1;
+            if (event.type == SDL_KEYDOWN && event.key.keysym.sym == 'q') {
+                quit = 1;
+                break;
+            }
+        }
+        time_t start = clock();
+
+        // #pragma openmp for collapse(2)
+        // for (int y = 0; y < height; ++y) {
+        //     for (int x = 0; x < width; ++x) {
+        //         float cx = map(x, 0, width, min_x, max_y);
+        //         float cy = map(y, 0, height, min_y, max_y);
+        //         int iter = mandelbrot(cx, cy, max_iter);
+        //         int colors[3];
+        //         color(iter, max_iter, (void*)&colors);
+        //         SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
+        //         SDL_RenderDrawPoint(renderer, x, y);
+        //     }
+        // }
+
+        #pragma openmp for collapse(2)
+        for (int iy = 0; iy < height; ++iy) {
+            __m128 vy = _mm_set_ps1(iy);
+            __m128 cy = map_sse(vy, y_factor, min_y); 
+            for (int ix = 0; ix < width; ix += 4){
+                float fx = (float)ix;
+                __m128 vx = _mm_add_ps(_mm_set_ps(0.0f, 1.0f, 2.0f, 3.0f), _mm_set_ps1(fx));
+                __m128 cx = map_sse(vx, x_factor, min_x);
+
+                __m128 x = cx;
+                __m128 y = cy;
+
+                __m128 iters = _mm_setzero_ps();
+                int iter = 0;
+                while(iter++ < max_iter) {
+                    __m128 x2 = _mm_mul_ps(x,x);
+                    __m128 y2 = _mm_mul_ps(y,y);
+                    __m128 xy = _mm_mul_ps(x,y);
+                    y = _mm_add_ps(_mm_add_ps(xy, xy), cy);
+                    x = _mm_add_ps(_mm_sub_ps(x2, y2), cx);
+
+                    x2 = _mm_mul_ps(x,x);
+                    y2 = _mm_mul_ps(y,y);
+                    __m128 mag = _mm_add_ps(x2, y2);
+                    __m128 mask = _mm_cmplt_ps(mag, _mm_set_ps1(4.0f));
+                    iters = _mm_add_ps(_mm_and_ps(mask, _mm_set_ps1(1.0f)), iters);
+
+                    if (_mm_movemask_ps(mask) == 0)
                         break;
-                    }
-                    if (event.type == SDL_KEYDOWN && event.key.keysym.sym == 'q') {
-                        quit = 1;
-                        break;
-                    }
                 }
-                float cx = map(x, 0, width, min_x, max_y);
-                float cy = map(y, 0, height, min_y, max_y);
-                int iter = mandelbrot(cx, cy, max_iter);
-                int colors[3];
-                color(iter, max_iter, (void*)&colors);
-                SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
-                SDL_RenderDrawPoint(renderer, x, y);
+                __m128i pixels = _mm_cvtps_epi32(iters);
+                for (int i = 0; i < 4; i++) {
+                    int colors[3];
+                    color(iters[i], max_iter, (void*)&colors);
+                    SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
+                    SDL_RenderDrawPoint(renderer, ix + i, iy);
+                }
             }
         }
 
-        if (quit) {
-            break;
-        }
+        time_t end = clock();
+        double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
+        printf("%f\n", time_spent);
     }
     // Close and destroy the window
     SDL_DestroyWindow(window);
