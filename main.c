@@ -19,6 +19,31 @@ void color(int n, int iter_max, int* colors) {
     colors[1] = nn - colors[0] * N;
 }
 
+__m128i mandelbrot_sse(__m128 cx, __m128 cy, int max_iter) {
+    __m128 x = cx;
+    __m128 y = cy;
+
+    __m128 iters = _mm_setzero_ps();
+    int iter = 0;
+    while(iter++ < max_iter) {
+        __m128 x2 = _mm_mul_ps(x,x);
+        __m128 y2 = _mm_mul_ps(y,y);
+        __m128 xy = _mm_mul_ps(x,y);
+        y = _mm_add_ps(_mm_add_ps(xy, xy), cy);
+        x = _mm_add_ps(_mm_sub_ps(x2, y2), cx);
+
+        x2 = _mm_mul_ps(x,x);
+        y2 = _mm_mul_ps(y,y);
+        __m128 mag = _mm_add_ps(x2, y2);
+        __m128 mask = _mm_cmplt_ps(mag, _mm_set_ps1(4.0f));
+        iters = _mm_add_ps(_mm_and_ps(mask, _mm_set_ps1(1.0f)), iters);
+
+        if (_mm_movemask_ps(mask) == 0)
+            break;
+    }
+    return _mm_cvtps_epi32(iters);
+}
+
 // assuming in_min is 0 and defining the factor as a constant for optimization
 __m128 map_sse(__m128 vec, float factor, float out_min) {
     __m128 mul_vec = _mm_mul_ps(vec, _mm_set_ps1(factor));
@@ -67,6 +92,11 @@ int main() {
     SDL_CreateWindowAndRenderer(1440, 1080, 0, &window, &renderer);
     SDL_RenderSetLogicalSize(renderer, width, height);
 
+    union _128i {
+        __m128i v;
+        int a[4];
+    };
+
     int quit = 0;
     while(1) {
         SDL_RenderPresent(renderer);
@@ -102,34 +132,14 @@ int main() {
             __m128 cy = map_sse(vy, y_factor, min_y); 
             for (int ix = 0; ix < width; ix += 4){
                 float fx = (float)ix;
-                __m128 vx = _mm_add_ps(_mm_set_ps(0.0f, 1.0f, 2.0f, 3.0f), _mm_set_ps1(fx));
+                __m128 vx = _mm_add_ps(_mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f), _mm_set_ps1(fx));
                 __m128 cx = map_sse(vx, x_factor, min_x);
-
-                __m128 x = cx;
-                __m128 y = cy;
-
-                __m128 iters = _mm_setzero_ps();
-                int iter = 0;
-                while(iter++ < max_iter) {
-                    __m128 x2 = _mm_mul_ps(x,x);
-                    __m128 y2 = _mm_mul_ps(y,y);
-                    __m128 xy = _mm_mul_ps(x,y);
-                    y = _mm_add_ps(_mm_add_ps(xy, xy), cy);
-                    x = _mm_add_ps(_mm_sub_ps(x2, y2), cx);
-
-                    x2 = _mm_mul_ps(x,x);
-                    y2 = _mm_mul_ps(y,y);
-                    __m128 mag = _mm_add_ps(x2, y2);
-                    __m128 mask = _mm_cmplt_ps(mag, _mm_set_ps1(4.0f));
-                    iters = _mm_add_ps(_mm_and_ps(mask, _mm_set_ps1(1.0f)), iters);
-
-                    if (_mm_movemask_ps(mask) == 0)
-                        break;
-                }
-                __m128i pixels = _mm_cvtps_epi32(iters);
+                
+                union _128i pixels;
+                pixels.v = mandelbrot_sse(cx, cy, max_iter);
                 for (int i = 0; i < 4; i++) {
                     int colors[3];
-                    color(iters[i], max_iter, (void*)&colors);
+                    color(pixels.a[i], max_iter, (void*)&colors);
                     SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
                     SDL_RenderDrawPoint(renderer, ix + i, iy);
                 }
