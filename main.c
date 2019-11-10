@@ -19,6 +19,40 @@ void color(int n, int iter_max, int* colors) {
     colors[1] = nn - colors[0] * N;
 }
 
+__m128i mandelbrot_avx(__m256d cx, __m256d cy, int max_iter) {
+    __m256d _4 = _mm256_set1_pd(4.0);
+    __m256d _1 = _mm256_set1_pd(1.0);
+    __m256d _0 = _mm256_set1_pd(0.0);
+
+    __m256d x = cx;
+    __m256d y = cy;
+    __m256d iters = _mm256_setzero_pd();
+    int iter = 0;
+    while(iter++ < max_iter) {
+        __m256d x2   = _mm256_mul_pd  (x, x);                
+        __m256d y2   = _mm256_mul_pd  (y, y);                
+        __m256d mag  = _mm256_add_pd  (x2, y2);              
+        __m256d mask = _mm256_cmp_pd  (mag, _4, _CMP_LT_OQ);
+
+        if (!_mm256_movemask_pd(mask)) {
+            break;
+        }
+
+        iters = _mm256_add_pd (iters, _mm256_and_pd(mask, _1));
+
+        __m256d xy = _mm256_mul_pd (x, y);                       
+        y          = _mm256_add_pd (_mm256_add_pd (xy, xy) , cy);
+        x          = _mm256_add_pd (_mm256_sub_pd (x2, y2) , cx);
+    }
+    return _mm256_cvtpd_epi32(iters);
+}
+
+__m256d map_avx(__m256d vec, float factor, float out_min) {
+    __m256d mul_vec = _mm256_mul_pd(vec, _mm256_set1_pd(factor));
+    __m256d res = _mm256_add_pd(mul_vec, _mm256_set1_pd(out_min));
+    return res;
+}
+
 __m128i mandelbrot_sse(__m128 cx, __m128 cy, int max_iter) {
     __m128 x = cx;
     __m128 y = cy;
@@ -113,6 +147,7 @@ int main() {
         }
         time_t start = clock();
 
+        // REFERENCE
         // #pragma openmp for collapse(2)
         // for (int y = 0; y < height; ++y) {
         //     for (int x = 0; x < width; ++x) {
@@ -126,22 +161,46 @@ int main() {
         //     }
         // }
 
-        #pragma openmp for collapse(2)
-        for (int iy = 0; iy < height; ++iy) {
-            __m128 vy = _mm_set_ps1(iy);
-            __m128 cy = map_sse(vy, y_factor, min_y); 
-            for (int ix = 0; ix < width; ix += 4){
-                float fx = (float)ix;
-                __m128 vx = _mm_add_ps(_mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f), _mm_set_ps1(fx));
-                __m128 cx = map_sse(vx, x_factor, min_x);
+        // SSE
+        // #pragma openmp for collapse(2)
+        // for (int iy = 0; iy < height; ++iy) {
+        //     float fy = (float)iy;
+        //     __m128 vy = _mm_set_ps1(fy);
+        //     __m128 cy = map_sse(vy, y_factor, min_y); 
+        //     for (int ix = 0; ix < width; ix += 4){
+        //         float fx = (float)ix;
+        //         __m128 vx = _mm_add_ps(_mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f), _mm_set_ps1(fx));
+        //         __m128 cx = map_sse(vx, x_factor, min_x);
                 
+        //         union _128i pixels;
+        //         pixels.v = mandelbrot_sse(cx, cy, max_iter);
+        //         for (int i = 0; i < 4; i++) {
+        //             int colors[3];
+        //             color(pixels.a[i], max_iter, (void*)&colors);
+        //             SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
+        //             SDL_RenderDrawPoint(renderer, ix + i, iy);
+        //         }
+        //     }
+        // }
+
+        // AVX
+        #pragma openmp for collapse(2)
+        for (int y = 0; y < height; ++y) {
+            double dy = (double)y;
+            __m256d vy = _mm256_set1_pd(dy);
+            __m256d cy = map_avx(vy, y_factor, min_y);
+            for (int x = 0; x < width; x += 4) {
+                double dx = (double)x;
+                __m256d vx = _mm256_add_pd(_mm256_set_pd(3.0, 2.0, 1.0, 0.0), _mm256_set1_pd(dx));
+                __m256d cx = map_avx(vx, x_factor, min_x);
+
                 union _128i pixels;
-                pixels.v = mandelbrot_sse(cx, cy, max_iter);
+                pixels.v = mandelbrot_avx(cx, cy, max_iter);
                 for (int i = 0; i < 4; i++) {
                     int colors[3];
                     color(pixels.a[i], max_iter, (void*)&colors);
                     SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
-                    SDL_RenderDrawPoint(renderer, ix + i, iy);
+                    SDL_RenderDrawPoint(renderer, x + i, y);
                 }
             }
         }
