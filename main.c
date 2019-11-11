@@ -5,6 +5,16 @@
 #include <emmintrin.h>
 #include <time.h>
 
+#define MANDEL_AVX_INNER() \
+        x2 = _mm256_mul_pd(x,x); \
+        y2 = _mm256_mul_pd(y,y); \
+        mag = _mm256_add_pd(x2,y2); \
+        xy = _mm256_mul_pd(x,y); \
+        y = _mm256_add_pd(_mm256_add_pd(xy,xy),cy); \
+        x = _mm256_add_pd(_mm256_sub_pd(x2,y2), cx); \
+        mask = _mm256_cmp_pd(mag, _4, _CMP_LT_OQ); \
+        iters = _mm256_add_pd(iters, _mm256_and_pd(mask, _1));
+
 void color(int n, int iter_max, int* colors) {
     int N = 256; // colors per element
     int N3 = N * N * N;
@@ -27,23 +37,25 @@ __m128i mandelbrot_avx(__m256d cx, __m256d cy, int max_iter) {
     __m256d x = cx;
     __m256d y = cy;
     __m256d iters = _mm256_setzero_pd();
-    int iter = 0;
-    while(iter++ < max_iter) {
-        __m256d x2   = _mm256_mul_pd  (x, x);                
-        __m256d y2   = _mm256_mul_pd  (y, y);                
-        __m256d mag  = _mm256_add_pd  (x2, y2);              
-        __m256d mask = _mm256_cmp_pd  (mag, _4, _CMP_LT_OQ);
 
+    __m256d x2,y2,mag,mask,xy;
+    for (int i = 6; i > 0; --i) {
+        MANDEL_AVX_INNER()
+        MANDEL_AVX_INNER()
+        MANDEL_AVX_INNER()
+        MANDEL_AVX_INNER()
+        MANDEL_AVX_INNER()
+        MANDEL_AVX_INNER()
+        MANDEL_AVX_INNER()
+        MANDEL_AVX_INNER()
+        
         if (!_mm256_movemask_pd(mask)) {
             break;
         }
-
-        iters = _mm256_add_pd (iters, _mm256_and_pd(mask, _1));
-
-        __m256d xy = _mm256_mul_pd (x, y);                       
-        y          = _mm256_add_pd (_mm256_add_pd (xy, xy) , cy);
-        x          = _mm256_add_pd (_mm256_sub_pd (x2, y2) , cx);
     }
+
+    MANDEL_AVX_INNER()
+    MANDEL_AVX_INNER()
     return _mm256_cvtpd_epi32(iters);
 }
 
@@ -198,7 +210,7 @@ int main() {
                 pixels.v = mandelbrot_avx(cx, cy, max_iter);
                 for (int i = 0; i < 4; i++) {
                     int colors[3];
-                    color(pixels.a[i], max_iter, (void*)&colors);
+                    color(pixels.a[i], 50, (void*)&colors);
                     SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
                     SDL_RenderDrawPoint(renderer, x + i, y);
                 }
