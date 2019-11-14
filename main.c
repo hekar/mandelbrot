@@ -15,6 +15,35 @@
         mask = _mm256_cmp_pd(mag, _4, _CMP_LT_OQ); \
         iters = _mm256_add_pd(iters, _mm256_and_pd(mask, _1));
 
+#define MANDEL_AVX_DEPENDENT(i) \
+        y[i]  = _mm256_add_pd(_mm256_add_pd(xy[i],xy[i]),cy[i]); \
+        x[i]  = _mm256_add_pd(_mm256_sub_pd(x2[i],y2[i]),cx[i]); \
+        mag[i] = _mm256_add_pd(x2[i],y2[i]); \
+        mask[i]  = _mm256_cmp_pd(mag[i], _4, _CMP_LT_OQ); \
+        iters[i] = _mm256_add_pd(iters[i], _mm256_and_pd(mask[i], _1));
+
+#define MANDEL_AVX_INDEPENDENT(i) \
+        xy[i] = _mm256_mul_pd(x[i],y[i]); \
+        x2[i] = _mm256_mul_pd(x[i],x[i]); \
+        y2[i] = _mm256_mul_pd(y[i],y[i]);
+
+#define MANDEL_AVX_ITERATION() \
+        MANDEL_AVX_INDEPENDENT(0) \
+        MANDEL_AVX_DEPENDENT(0) \
+        MANDEL_AVX_INDEPENDENT(1) \
+        MANDEL_AVX_DEPENDENT(1) \
+        MANDEL_AVX_INDEPENDENT(2) \
+        MANDEL_AVX_DEPENDENT(2) \
+        MANDEL_AVX_INDEPENDENT(3) \
+        MANDEL_AVX_DEPENDENT(3) \
+
+#define MANDEL_AVX_MASK() \
+        cmp_mask      =   \
+            (_mm256_movemask_pd (mask[0]) << 4 ) \
+          | (_mm256_movemask_pd (mask[1])      ) \
+          | (_mm256_movemask_pd (mask[2]) << 12) \
+          | (_mm256_movemask_pd (mask[3]) << 8);
+
 void color(int n, int iter_max, int* colors) {
     int N = 256; // colors per element
     int N3 = N * N * N;
@@ -29,34 +58,44 @@ void color(int n, int iter_max, int* colors) {
     colors[1] = nn - colors[0] * N;
 }
 
-__m128i mandelbrot_avx(__m256d cx, __m256d cy, int max_iter) {
+void mandelbrot_avx(__m256d cx[4], __m256d cy[4], int max_iter, __m256d* iters) {
     __m256d _4 = _mm256_set1_pd(4.0);
     __m256d _1 = _mm256_set1_pd(1.0);
     __m256d _0 = _mm256_set1_pd(0.0);
 
-    __m256d x = cx;
-    __m256d y = cy;
-    __m256d iters = _mm256_setzero_pd();
+    __m256d x[4] = {cx[0], cx[1], cx[2], cx[3]};
+    __m256d y[4] = {cy[0], cy[1], cy[2], cy[3]};
+    // __m256d iters[4] = {_mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd()};
 
-    __m256d x2,y2,mag,mask,xy;
-    for (int i = 6; i > 0; --i) {
-        MANDEL_AVX_INNER()
-        MANDEL_AVX_INNER()
-        MANDEL_AVX_INNER()
-        MANDEL_AVX_INNER()
-        MANDEL_AVX_INNER()
-        MANDEL_AVX_INNER()
-        MANDEL_AVX_INNER()
-        MANDEL_AVX_INNER()
-        
-        if (!_mm256_movemask_pd(mask)) {
-            break;
+    __m256d x2[4], y2[4], mask[4], xy[4];
+    __m256d mag[4];
+
+    int iter = 6;
+    uint32_t cmp_mask = 0;
+    
+    for (int iter = 6; iter > 0; --iter) {
+        MANDEL_AVX_ITERATION()
+        MANDEL_AVX_ITERATION()
+        MANDEL_AVX_ITERATION()
+        MANDEL_AVX_ITERATION()
+        MANDEL_AVX_ITERATION()
+        MANDEL_AVX_ITERATION()
+        MANDEL_AVX_ITERATION()
+        MANDEL_AVX_ITERATION()
+
+        MANDEL_AVX_MASK()
+
+        if (!cmp_mask) {
+            return;
         }
+
+
     }
 
-    MANDEL_AVX_INNER()
-    MANDEL_AVX_INNER()
-    return _mm256_cvtpd_epi32(iters);
+    MANDEL_AVX_ITERATION()
+    MANDEL_AVX_ITERATION()
+
+    return;
 }
 
 __m256d map_avx(__m256d vec, float factor, float out_min) {
@@ -185,10 +224,10 @@ int main() {
         //         __m128 cx = map_sse(vx, x_factor, min_x);
                 
         //         union _128i pixels;
-        //         pixels.v = mandelbrot_sse(cx, cy, max_iter);
+        //         pixels.v = mandelbrot_sse(cx, cy, 50);
         //         for (int i = 0; i < 4; i++) {
         //             int colors[3];
-        //             color(pixels.a[i], max_iter, (void*)&colors);
+        //             color(pixels.a[i], 50, (void*)&colors);
         //             SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
         //             SDL_RenderDrawPoint(renderer, ix + i, iy);
         //         }
@@ -200,22 +239,72 @@ int main() {
         for (int y = 0; y < height; ++y) {
             double dy = (double)y;
             __m256d vy = _mm256_set1_pd(dy);
-            __m256d cy = map_avx(vy, y_factor, min_y);
-            for (int x = 0; x < width; x += 4) {
+            __m256d cvy = map_avx(vy, y_factor, min_y);
+            __m256d cy[4] = {cvy, cvy, cvy, cvy};
+            for (int x = 0; x < width; x += 16) {
                 double dx = (double)x;
-                __m256d vx = _mm256_add_pd(_mm256_set_pd(3.0, 2.0, 1.0, 0.0), _mm256_set1_pd(dx));
-                __m256d cx = map_avx(vx, x_factor, min_x);
+                __m256d vx0 = _mm256_add_pd(_mm256_set_pd(3.0, 2.0, 1.0, 0.0), _mm256_set1_pd(dx));
+                __m256d vx1 = _mm256_add_pd(_mm256_set_pd(4.0, 4.0, 4.0, 4.0), vx0);
+                __m256d vx2 = _mm256_add_pd(_mm256_set_pd(4.0, 4.0, 4.0, 4.0), vx1);
+                __m256d vx3 = _mm256_add_pd(_mm256_set_pd(4.0, 4.0, 4.0, 4.0), vx2);
+                __m256d cx[4] = {map_avx(vx0, x_factor, min_x), map_avx(vx1, x_factor, min_x), map_avx(vx2, x_factor, min_x), map_avx(vx3, x_factor, min_x)};
 
                 union _128i pixels;
-                pixels.v = mandelbrot_avx(cx, cy, max_iter);
+                __m256d res[4] = {_mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd()};
+                mandelbrot_avx(cx, cy, max_iter, res);
+                int offset = 0;
                 for (int i = 0; i < 4; i++) {
-                    int colors[3];
-                    color(pixels.a[i], 50, (void*)&colors);
-                    SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
-                    SDL_RenderDrawPoint(renderer, x + i, y);
+                    pixels.v = _mm256_cvtpd_epi32(res[i]);
+                    for (int j = 0; j < 4; j++) {
+                        int colors[3];
+                        color(pixels.a[j], 50, (void*)&colors);
+                        SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
+                        SDL_RenderDrawPoint(renderer, x + offset++, y);
+                    }
                 }
             }
         }
+
+        // __m256d min_x_4 = _mm256_set1_pd (min_x);
+        // __m256d scale_x_4 = _mm256_set1_pd(x_factor);
+        // __m256d lshift_x_4 = _mm256_set_pd(0, 1, 2, 3);
+        // __m256d ushift_x_4 = _mm256_set_pd(4, 5, 6, 7);
+
+        // for (int sy = 0; sy < height; sy += 2) {
+        //     double dy = (double)sy;
+        //     __m256d cy0 = _mm256_set1_pd(y_factor*dy + min_y);
+        //     __m256d cy1 = _mm256_set1_pd(y_factor*(dy+1) + min_y);
+        //     for (int sx = 0; sx < width; ++sx) {
+        //         int x = sx*8;
+        //         __m256d x_8 = _mm256_set1_pd(x);
+        //         __m256d cx0 = _mm256_add_pd(min_x_4, _mm256_mul_pd(_mm256_add_pd(x_8, lshift_x_4), scale_x_4));
+        //         __m256d cx1 = _mm256_add_pd(min_x_4, _mm256_mul_pd(_mm256_add_pd(x_8, ushift_x_4), scale_x_4));
+        //         __m256d cx[4] = { cx0, cx1, cx0, cx1 };
+        //         __m256d cy[4] = { cy0, cy0, cy1, cy1 };
+        //         __m256d res[4] = {_mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd()};
+        //         mandelbrot_avx(cx, cy, max_iter, res);
+        //         union _128i pixels;
+        //         for (int i = 0; i < 4; ++i) {
+        //             pixels.v = _mm256_cvtpd_epi32(res[i]);
+        //             int x_c = sx;
+        //             if (i % 2) {
+        //                 x_c = sx + 3;
+        //             } else {
+        //                 x_c = sx + 7;
+        //             }
+        //             int y_c = sy;
+        //             if (i > 1) {
+        //                 y_c++;
+        //             }
+        //             for (int j = 0; j < 4; ++j) {
+        //                 int colors[3];
+        //                 color(pixels.a[j], 50, (void*)&colors);
+        //                 SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
+        //                 SDL_RenderDrawPoint(renderer, sx + x_c--, y_c);
+        //             }
+        //         }
+        //     }
+        // }
 
         time_t end = clock();
         double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
