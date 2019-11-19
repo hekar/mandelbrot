@@ -10,6 +10,16 @@ include_directories(${SDL2_INCLUDE_DIRS})
 
 find_package(OpenMP)
 
-add_executable(mandelbrot main.c)
+SET(SOURCES main.c
+            include/mandelbrot.h
+            include/mandelbrot_avx.h
+            include/mandelbrot_sse.h
+            src/mandelbrot.c
+            src/mandelbrot_avx.c
+            src/mandelbrot_sse.c
+)
+
+add_executable(mandelbrot ${SOURCES})
 target_link_libraries(mandelbrot ${SDL2_LIBRARIES})
 target_link_libraries(mandelbrot OpenMP::OpenMP_C)
+target_include_directories(mandelbrot PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
