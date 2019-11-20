@@ -10,6 +10,42 @@
 #include "mandelbrot_sse.h"
 #include "mandelbrot_avx.h"
 
+const int width = 1440;
+const int height = 1080;
+const int max_iter = 50;
+double min_x;
+double max_x;
+double min_y;
+double max_y;
+double x_factor;
+double y_factor;
+
+enum instruction_set {
+    def,
+    avx,
+    sse
+};
+
+union _128i {
+    __m128i v;
+    int a[4];
+};
+
+union _256d_4 {
+    __m256d v[4];
+    double  arr[4][4];
+};
+
+void color_poly(int n, int iter_max, int* colors) {
+	// map n on the 0..1 interval
+	double t = (double)n/(double)iter_max;
+
+	// Use smooth polynomials for r, g, b
+	colors[0] = (int)(9*(1-t)*t*t*t*255);
+	colors[1] = (int)(15*(1-t)*(1-t)*t*t*255);
+	colors[2] =  (int)(8.5*(1-t)*(1-t)*(1-t)*t*255);
+}
+
 void color(int n, int iter_max, int* colors) {
     int N = 256; // colors per element
     int N3 = N * N * N;
@@ -36,68 +72,13 @@ is_avx_supported(void)
 }
 #endif // __x86_64__
 
-int main(int argc, char** argv) {
-
-    // parse options
-    int use_avx = 0;
-    int use_sse = 0;
-    int opt;
-    while((opt = getopt(argc, argv, "i:")) != -1)  
-    {  
-        switch(opt)  
-        {  
-            case 'i':
-            switch(*optarg) {
-                case 'A':
-                    use_avx = 1;
-                    break;
-                case 'S':
-                    use_sse = 1;
-                    break;
-                default:
-                    break;
-            }
-            break;
-        }
-    }
-
-    SDL_Init(SDL_INIT_VIDEO);
-
-    SDL_Window*   window;
-    SDL_Renderer* renderer;
-    SDL_Event     event;
-
-    const int width = 1440;
-    const int height = 1080;
-    const int max_iter = 50;
-    const double min_x = -2.5;
-    const double max_x = 1.5;
-    const double min_y = -1.5;
-    const double max_y = min_y + (max_x - min_x) * height / width; 
-    double x_factor = (max_x - min_x) / width;
-    double y_factor = (max_y - min_y) / height;
-
-    int* color_arr = malloc(sizeof(int)*width*height);
-
-    SDL_CreateWindowAndRenderer(1440, 1080, 0, &window, &renderer);
-    SDL_RenderSetLogicalSize(renderer, width, height);
-
-    union _128i {
-        __m128i v;
-        int a[4];
-    };
-
-    union _256d_4 {
-        __m256d v[4];
-        double  arr[4][4];
-    };
-
+void mandelbrot_driver(int* color_arr, int i_set) {
     __m256d _3210 = _mm256_set_pd(3.0, 2.0, 1.0, 0.0);
     __m256d _4    = _mm256_set1_pd(4.0);
 
     time_t start = clock();
     #ifdef __x86_64__
-    if (use_avx && is_avx_supported()) {
+    if ((i_set == avx) && is_avx_supported()) {
         #pragma openmp parallel for schedule(guided)
         for (int y = 0; y < height; ++y) {
             __m256d vy = _mm256_set1_pd((double)y);
@@ -121,7 +102,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-    } else if (use_sse) {
+    } else if (i_set == sse) {
         #pragma openmp for collapse(2)
         for (int iy = 0; iy < height; ++iy) {
             float fy = (float)iy;
@@ -131,7 +112,7 @@ int main(int argc, char** argv) {
                 float fx = (float)ix;
                 __m128 vx = _mm_add_ps(_mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f), _mm_set_ps1(fx));
                 __m128 cx = map_sse(vx, x_factor, min_x);
-                
+
                 union _128i pixels;
                 pixels.v = mandelbrot_sse(cx, cy, max_iter);
                 for (int i = 0; i < 4; i++) {
@@ -156,19 +137,90 @@ int main(int argc, char** argv) {
     time_t end = clock();
     double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
     printf("%f\n", time_spent);
+}
 
-    int quit = 0;
+void update_display_cfg(double x_min, double x_max, double y_min) {
+    min_x = x_min;
+    max_x = x_max;
+    min_y = y_min;
+    max_y = min_y + (max_x - min_x) * height / width;
+    x_factor = (max_x - min_x) / width;
+    y_factor = (max_y - min_y) / height;
+}
+
+double map_double(double val, double in_max, double out_min, double out_max) {
+    return (val) * (out_max - out_min) / (in_max) + out_min;
+}
+
+int main(int argc, char** argv) {
+
+    // parse options
+    enum instruction_set i_set;
+    int opt;
+    while((opt = getopt(argc, argv, "i:")) != -1)  
+    {  
+        switch(opt)  
+        {  
+            case 'i':
+            switch(*optarg) {
+                case 'A':
+                    i_set = avx;
+                    break;
+                case 'S':
+                    i_set = sse;
+                    break;
+                default:
+                    i_set = def;
+                    break;
+            }
+            break;
+        }
+    }
+
+    SDL_Init(SDL_INIT_VIDEO);
+
+    SDL_Window*   window;
+    SDL_Renderer* renderer;
+    SDL_Event     event;
+
+    int* color_arr = malloc(sizeof(int)*width*height);
+
+    SDL_CreateWindowAndRenderer(1440, 1080, 0, &window, &renderer);
+    SDL_RenderSetLogicalSize(renderer, width, height);
+
+    update_display_cfg(-2.5, 1.5, -1.5);
+    mandelbrot_driver(color_arr, i_set);
+
     while(1) {
         SDL_RenderPresent(renderer);
 
         if (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
-                quit = 1;
                 break;
             }
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == 'q') {
-                quit = 1;
                 break;
+            }
+            if(event.type == SDL_MOUSEWHEEL)
+            {
+                if(event.wheel.y > 0) // scroll up
+                {
+                    // Put code for handling "scroll up" here!
+                    int x, y;
+                    SDL_GetMouseState(&x, &y);
+                    double dx = map_double(x, width, min_x, max_x);
+                    double dy = map_double(y, height, min_y, max_y);
+                    double x_max_bound = dx + 0.7*(max_x - dx);
+                    double x_min_bound = dx + 0.7*(min_x - dx);
+                    double y_min_bound = dy + 0.7*(min_y - dy);
+                    update_display_cfg(x_min_bound, x_max_bound, y_min_bound);
+                    mandelbrot_driver(color_arr, i_set);
+                }
+                else if(event.wheel.y < 0) // scroll down
+                {
+                    // Put code for handling "scroll down" here!
+                    printf("mouse wheel down %d\n", event.wheel.y);
+                }
             }
         }
 
@@ -176,7 +228,7 @@ int main(int argc, char** argv) {
         for (int h = 0; h < height; h++) {
             for (int w = 0; w < width; w++) {
                 int colors[3];
-                color(color_arr[w + (h*width)], 50, (void*)&colors);
+                color_poly(color_arr[w + (h*width)], 50, (void*)&colors);
                 SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
                 SDL_RenderDrawPoint(renderer, w, h);
             }
