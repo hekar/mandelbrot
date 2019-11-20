@@ -77,6 +77,8 @@ int main(int argc, char** argv) {
     double x_factor = (max_x - min_x) / width;
     double y_factor = (max_y - min_y) / height;
 
+    int* color_arr = malloc(sizeof(int)*width*height);
+
     SDL_CreateWindowAndRenderer(1440, 1080, 0, &window, &renderer);
     SDL_RenderSetLogicalSize(renderer, width, height);
 
@@ -84,6 +86,76 @@ int main(int argc, char** argv) {
         __m128i v;
         int a[4];
     };
+
+    union _256d_4 {
+        __m256d v[4];
+        double  arr[4][4];
+    };
+
+    __m256d _3210 = _mm256_set_pd(3.0, 2.0, 1.0, 0.0);
+    __m256d _4    = _mm256_set1_pd(4.0);
+
+    time_t start = clock();
+    #ifdef __x86_64__
+    if (use_avx && is_avx_supported()) {
+        #pragma openmp parallel for schedule(guided)
+        for (int y = 0; y < height; ++y) {
+            __m256d vy = _mm256_set1_pd((double)y);
+            __m256d cvy = map_avx(vy, y_factor, min_y);
+            __m256d cy[4] = {cvy, cvy, cvy, cvy};
+            for (int x = 0; x < width; x += 16) {
+                __m256d vx0 = _mm256_add_pd(_3210, _mm256_set1_pd((double)x));
+                __m256d vx1 = _mm256_add_pd(_4, vx0);
+                __m256d vx2 = _mm256_add_pd(_4, vx1);
+                __m256d vx3 = _mm256_add_pd(_4, vx2);
+                __m256d cx[4] = {map_avx(vx0, x_factor, min_x), map_avx(vx1, x_factor, min_x),
+                                    map_avx(vx2, x_factor, min_x), map_avx(vx3, x_factor, min_x)};
+
+                union _256d_4 res = {_mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd()};
+                mandelbrot_avx(cx, cy, max_iter, res.v);
+                int offset = 0;
+                for (int i = 0; i < 4; i++) {
+                    for (int j = 0; j < 4; j++) {
+                        color_arr[width*y + (x+offset++)] = res.arr[i][j];
+                    }
+                }
+            }
+        }
+    } else if (use_sse) {
+        #pragma openmp for collapse(2)
+        for (int iy = 0; iy < height; ++iy) {
+            float fy = (float)iy;
+            __m128 vy = _mm_set_ps1(fy);
+            __m128 cy = map_sse(vy, y_factor, min_y);
+            for (int ix = 0; ix < width; ix += 4){
+                float fx = (float)ix;
+                __m128 vx = _mm_add_ps(_mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f), _mm_set_ps1(fx));
+                __m128 cx = map_sse(vx, x_factor, min_x);
+                
+                union _128i pixels;
+                pixels.v = mandelbrot_sse(cx, cy, max_iter);
+                for (int i = 0; i < 4; i++) {
+                    color_arr[width*iy + (ix+i)] = pixels.a[i];
+                }
+            }
+        }
+    }
+    #endif // __x86_64__
+    else {
+        #pragma openmp for collapse(2)
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                float cx = map(x, 0, width, min_x, max_y);
+                float cy = map(y, 0, height, min_y, max_y);
+                int iter = mandelbrot(cx, cy, max_iter);
+                color_arr[width*y + x] = iter;
+            }
+        }
+    }
+
+    time_t end = clock();
+    double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
+    printf("%f\n", time_spent);
 
     int quit = 0;
     while(1) {
@@ -99,81 +171,16 @@ int main(int argc, char** argv) {
                 break;
             }
         }
-        time_t start = clock();
 
-        #ifdef __x86_64__
-        if (use_avx && is_avx_supported()) {
-            // AVX
-            #pragma openmp for collapse(2)
-            for (int y = 0; y < height; ++y) {
-                __m256d vy = _mm256_set1_pd((double)y);
-                __m256d cvy = map_avx(vy, y_factor, min_y);
-                __m256d cy[4] = {cvy, cvy, cvy, cvy};
-                for (int x = 0; x < width; x += 16) {
-                    __m256d vx0 = _mm256_add_pd(_mm256_set_pd(3.0, 2.0, 1.0, 0.0), _mm256_set1_pd((double)x));
-                    __m256d vx1 = _mm256_add_pd(_mm256_set_pd(4.0, 4.0, 4.0, 4.0), vx0);
-                    __m256d vx2 = _mm256_add_pd(_mm256_set_pd(4.0, 4.0, 4.0, 4.0), vx1);
-                    __m256d vx3 = _mm256_add_pd(_mm256_set_pd(4.0, 4.0, 4.0, 4.0), vx2);
-                    __m256d cx[4] = {map_avx(vx0, x_factor, min_x), map_avx(vx1, x_factor, min_x), map_avx(vx2, x_factor, min_x), map_avx(vx3, x_factor, min_x)};
-
-                    union _128i pixels;
-                    __m256d res[4] = {_mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd(), _mm256_setzero_pd()};
-                    mandelbrot_avx(cx, cy, max_iter, res);
-                    int offset = 0;
-                    for (int i = 0; i < 4; i++) {
-                        pixels.v = _mm256_cvtpd_epi32(res[i]);
-                        for (int j = 0; j < 4; j++) {
-                            int colors[3];
-                            color(pixels.a[j], 50, (void*)&colors);
-                            SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
-                            SDL_RenderDrawPoint(renderer, x + offset++, y);
-                        }
-                    }
-                }
-            }
-        } else if (use_sse) {
-            // SSE
-            #pragma openmp for collapse(2)
-            for (int iy = 0; iy < height; ++iy) {
-                float fy = (float)iy;
-                __m128 vy = _mm_set_ps1(fy);
-                __m128 cy = map_sse(vy, y_factor, min_y); 
-                for (int ix = 0; ix < width; ix += 4){
-                    float fx = (float)ix;
-                    __m128 vx = _mm_add_ps(_mm_set_ps(3.0f, 2.0f, 1.0f, 0.0f), _mm_set_ps1(fx));
-                    __m128 cx = map_sse(vx, x_factor, min_x);
-                    
-                    union _128i pixels;
-                    pixels.v = mandelbrot_sse(cx, cy, max_iter);
-                    for (int i = 0; i < 4; i++) {
-                        int colors[3];
-                        color(pixels.a[i], max_iter, (void*)&colors);
-                        SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
-                        SDL_RenderDrawPoint(renderer, ix + i, iy);
-                    }
-                }
+        // DRAWING
+        for (int h = 0; h < height; h++) {
+            for (int w = 0; w < width; w++) {
+                int colors[3];
+                color(color_arr[w + (h*width)], 50, (void*)&colors);
+                SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
+                SDL_RenderDrawPoint(renderer, w, h);
             }
         }
-        #endif // __x86_64__
-        else {
-            // REFERENCE
-            #pragma openmp for collapse(2)
-            for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    float cx = map(x, 0, width, min_x, max_y);
-                    float cy = map(y, 0, height, min_y, max_y);
-                    int iter = mandelbrot(cx, cy, max_iter);
-                    int colors[3];
-                    color(iter, max_iter, (void*)&colors);
-                    SDL_SetRenderDrawColor(renderer, colors[0], colors[1], colors[2], 255);
-                    SDL_RenderDrawPoint(renderer, x, y);
-                }
-            }
-        }
-
-        time_t end = clock();
-        double time_spent = (double)(end - start) / CLOCKS_PER_SEC;
-        printf("%f\n", time_spent);
     }
     // Close and destroy the window
     SDL_DestroyWindow(window);

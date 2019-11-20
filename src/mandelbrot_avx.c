@@ -48,7 +48,6 @@ void mandelbrot_avx(__m256d cx[4], __m256d cy[4], int max_iter, __m256d* iters) 
     __m256d x2[4], y2[4], mask[4], xy[4];
     __m256d mag[4];
 
-    int iter = 6;
     uint32_t cmp_mask = 0;
     
     for (int iter = 6; iter > 0; --iter) {
@@ -66,8 +65,6 @@ void mandelbrot_avx(__m256d cx[4], __m256d cy[4], int max_iter, __m256d* iters) 
         if (!cmp_mask) {
             return;
         }
-
-
     }
 
     MANDEL_AVX_ITERATION()
