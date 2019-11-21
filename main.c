@@ -31,6 +31,8 @@ int height = 800;
 const int max_iter = 50;
 double x_factor;
 double y_factor;
+int prev_mouse_x;
+int prev_mouse_y;
 
 long double factor = 1;
 
@@ -51,13 +53,13 @@ union _256d_4 {
 };
 
 void color_poly(int n, int iter_max, int* colors) {
-	// map n on the 0..1 interval
-	double t = (double)n/(double)iter_max;
+    // map n on the 0..1 interval
+    double t = (double)n/(double)iter_max;
 
-	// Use smooth polynomials for r, g, b
-	colors[0] = (int)(9*(1-t)*t*t*t*255);
-	colors[1] = (int)(15*(1-t)*(1-t)*t*t*255);
-	colors[2] =  (int)(8.5*(1-t)*(1-t)*(1-t)*t*255);
+    // Use smooth polynomials for r, g, b
+    colors[0] = (int)(9*(1-t)*t*t*t*255);
+    colors[1] = (int)(15*(1-t)*(1-t)*t*t*255);
+    colors[2] =  (int)(8.5*(1-t)*(1-t)*(1-t)*t*255);
 }
 
 void color(int n, int iter_max, int* colors) {
@@ -162,19 +164,18 @@ double map_double(double val, double in_max, double out_min, double out_max) {
     return (val) * (out_max - out_min) / (in_max) + out_min;
 }
 
-void zoom(coord_t mouse_x, coord_t mouse_y, double factor, ZoomDir_t zoom_dir) {
-
-    const double mul = (zoom_dir == ZOOM_IN) ? -1.0f : 1.0f;
-    coord_t min_x = mouse_x + factor * (bounds.min_x + (mouse_x * mul));
-    coord_t max_x = mouse_x + factor * (bounds.max_x + (mouse_x * mul));
-    coord_t min_y = mouse_y + factor * (bounds.min_y + (mouse_y * mul));
-    coord_t max_y = mouse_y + factor * (bounds.max_y + (mouse_y * mul));
+void zoom(coord_t mouse_x, coord_t mouse_y, ZoomDir_t zoom_dir) {
+    const double zoom_factor = (zoom_dir == ZOOM_IN) ? 0.8 : 1.2;
+    coord_t min_x = mouse_x + zoom_factor * (bounds.min_x - mouse_x);
+    coord_t max_x = mouse_x + zoom_factor * (bounds.max_x - mouse_x);
+    coord_t min_y = mouse_y + zoom_factor * (bounds.min_y - mouse_y);
+    coord_t max_y = mouse_y + zoom_factor * (bounds.max_y - mouse_y);
 
     bounds.min_x = min_x;
     bounds.max_x = max_x;
     bounds.min_y = min_y;
     bounds.max_y = max_y;
-    
+
     update_display_cfg(&bounds);
 }
 
@@ -212,7 +213,7 @@ int main(int argc, char** argv) {
     int* color_arr = malloc(sizeof(int)*width*height);
 
     window = SDL_CreateWindow("mandelbrot", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_WINDOW_RESIZABLE);
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_PRESENTVSYNC);
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     SDL_RenderSetLogicalSize(renderer, width, height);
 
     update_display_cfg(&bounds);
@@ -234,20 +235,39 @@ int main(int argc, char** argv) {
                 width = (double)w;
                 height = (double)h;
             }
+            else if (event.type == SDL_MOUSEBUTTONDOWN) {
+                int x, y;
+                SDL_GetMouseState(&x, &y);
+
+                double delta_x = map_double(prev_mouse_x - x, width, bounds.min_x, bounds.max_y);
+                double delta_y = map_double(prev_mouse_y - y, height, bounds.min_y, bounds.max_y);
+
+                double factor_x = (delta_x > 0) ? 0.05 : -0.05;
+                double factor_y = (delta_y > 0) ? 0.05 : -0.05;
+                bounds.min_x += delta_x * factor_x;
+                bounds.max_x += delta_x * factor_x;
+                bounds.min_y += delta_y * factor_y;
+                bounds.max_y += delta_y * factor_y;
+
+                update_display_cfg(&bounds);
+                mandelbrot_driver(&bounds, color_arr, i_set);
+
+                prev_mouse_x = x;
+                prev_mouse_y = y;
+            }
             else if(event.type == SDL_MOUSEWHEEL)
             {
                 int x, y;
                 SDL_GetMouseState(&x, &y);
                 coord_t mouse_x = map_double(x, width, bounds.min_x, bounds.max_x);
                 coord_t mouse_y = map_double(y, height, bounds.min_y, bounds.max_y);
-                const double zoom_factor = 0.7;
                 if(event.wheel.y > 0)
                 {
-                    zoom(mouse_x, mouse_y, zoom_factor, ZOOM_IN);
+                    zoom(mouse_x, mouse_y, ZOOM_IN);
                 }
                 else if(event.wheel.y < 0)
                 {
-                    zoom(mouse_x, mouse_y, zoom_factor, ZOOM_OUT);
+                    zoom(mouse_x, mouse_y, ZOOM_OUT);
                 }
                 mandelbrot_driver(&bounds, color_arr, i_set);
             }
