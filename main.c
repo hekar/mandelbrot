@@ -10,8 +10,8 @@
 #include "mandelbrot_sse.h"
 #include "mandelbrot_avx.h"
 
-const int width = 1440;
-const int height = 1080;
+const int width = 800;
+const int height = 800;
 const int max_iter = 50;
 double min_x;
 double max_x;
@@ -19,6 +19,8 @@ double min_y;
 double max_y;
 double x_factor;
 double y_factor;
+
+long double factor = 1;
 
 enum instruction_set {
     def,
@@ -126,7 +128,7 @@ void mandelbrot_driver(int* color_arr, int i_set) {
         #pragma openmp for collapse(2)
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
-                float cx = map(x, 0, width, min_x, max_y);
+                float cx = map(x, 0, width, min_x, max_x);
                 float cy = map(y, 0, height, min_y, max_y);
                 int iter = mandelbrot(cx, cy, max_iter);
                 color_arr[width*y + x] = iter;
@@ -139,16 +141,18 @@ void mandelbrot_driver(int* color_arr, int i_set) {
     printf("%f\n", time_spent);
 }
 
-void update_display_cfg(double x_min, double x_max, double y_min) {
+void update_display_cfg(double x_min, double x_max, double y_min, double y_max) {
     min_x = x_min;
     max_x = x_max;
     min_y = y_min;
-    max_y = min_y + (max_x - min_x) * height / width;
+    max_y = y_max;
+    // max_y = min_y + (max_x - min_x) * height / width;
     x_factor = (max_x - min_x) / width;
     y_factor = (max_y - min_y) / height;
 }
 
 double map_double(double val, double in_max, double out_min, double out_max) {
+    // 425 * (2 - 400 / 800) + 400
     return (val) * (out_max - out_min) / (in_max) + out_min;
 }
 
@@ -185,10 +189,10 @@ int main(int argc, char** argv) {
 
     int* color_arr = malloc(sizeof(int)*width*height);
 
-    SDL_CreateWindowAndRenderer(1440, 1080, 0, &window, &renderer);
+    SDL_CreateWindowAndRenderer(width, height, 0, &window, &renderer);
     SDL_RenderSetLogicalSize(renderer, width, height);
 
-    update_display_cfg(-2.5, 1.5, -1.5);
+    update_display_cfg(-2.0, 2.0, -2.0, 2.0);
     mandelbrot_driver(color_arr, i_set);
 
     while(1) {
@@ -210,10 +214,30 @@ int main(int argc, char** argv) {
                     SDL_GetMouseState(&x, &y);
                     double dx = map_double(x, width, min_x, max_x);
                     double dy = map_double(y, height, min_y, max_y);
-                    double x_max_bound = dx + 0.7*(max_x - dx);
-                    double x_min_bound = dx + 0.7*(min_x - dx);
-                    double y_min_bound = dy + 0.7*(min_y - dy);
-                    update_display_cfg(x_min_bound, x_max_bound, y_min_bound);
+                    // printf("dx is : %f\n", dx);
+                    // printf("dy is : %f\n", dy);
+
+                    double x_min = dx + 0.7*(min_x - dx);
+                    double x_max = dx + 0.7*(max_x - dx);
+                    double y_min = dy + 0.7*(min_y - dy);
+                    double y_max = dy + 0.7*(max_y - dy);
+                    // // printf("factor is : %f\n", factor);
+                    // printf("x_min is : %f\n", x_min);
+                    // printf("x_max is : %f\n", x_max);
+                    // printf("y_min is : %f\n", y_min);
+                    // printf("y_max is : %f\n", y_max);
+
+                    // double x_max = max_x - (0.1* (max_x - dx));
+                    // double x_min = min_x + (0.1* (dx - min_x));
+                    // double y_max = max_y - (0.1* (max_y - dy));
+                    // double y_min = min_y + (0.1* (dy - min_y));
+
+                    // max_x -= 0.1 * factor;
+                    // min_x += 0.15 * factor;
+                    // max_y -= 0.1 * factor;
+                    // min_y += 0.15 * factor;
+                    // factor *= 0.9349;
+                    update_display_cfg(x_min, x_max, y_min, y_max);
                     mandelbrot_driver(color_arr, i_set);
                 }
                 else if(event.wheel.y < 0) // scroll down
